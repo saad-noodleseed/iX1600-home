@@ -1,0 +1,41 @@
+#!/bin/bash
+# Turn finished scan jobs into searchable PDFs and upload them to Google Drive.
+# Runs from scanpi-process.path (new job) and scanpi-process.timer (retries).
+# Local files are only removed after rclone confirms the upload.
+set -u
+. /etc/scanpi.conf
+
+SPOOL=/var/lib/scanpi
+exec 9>"$SPOOL/.process.lock"
+flock -n 9 || exit 0
+
+shopt -s nullglob
+for job in "$SPOOL"/incoming/scan_*/; do
+    job=${job%/}
+    name=$(basename "$job")
+    sub=""
+    if [ -n "$SUBDIR_FORMAT" ]; then
+        # Folder date comes from the job name (scan_YYYY-MM-DD_HHMMSS).
+        sub=$(date -d "${name:5:10}" +"$SUBDIR_FORMAT")/
+    fi
+    mkdir -p "$SPOOL/outbox/$sub"
+    raw="$job/raw.pdf"
+    out="$SPOOL/outbox/$sub$name.pdf"
+
+    echo "processing $name"
+    if img2pdf "$job"/page*.tiff -o "$raw" &&
+       ocrmypdf -l "$OCR_LANG" --rotate-pages --deskew --optimize 1 \
+           --output-type pdf "$raw" "$out"; then
+        rm -rf "$job"
+    else
+        echo "OCR failed for $name, moving to failed/"
+        mkdir -p "$SPOOL/failed"
+        mv "$job" "$SPOOL/failed/"
+        rm -f "$out"
+    fi
+done
+
+# Upload; rclone move deletes each local file only once it is safely uploaded.
+rclone move "$SPOOL/outbox" "$DEST" --include '*.pdf' --delete-empty-src-dirs \
+    --retries 3 --log-level INFO \
+    || echo "upload failed, will retry on next run"

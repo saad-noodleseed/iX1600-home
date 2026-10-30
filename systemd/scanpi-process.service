@@ -1,0 +1,12 @@
+[Unit]
+Description=OCR scanned pages and upload them to Google Drive
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Replaced by install.sh with the user who ran "rclone config".
+User=@USER@
+Group=scanner
+ExecStart=/usr/local/bin/scanpi-process
+Nice=10

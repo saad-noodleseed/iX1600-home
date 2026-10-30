@@ -1,0 +1,8 @@
+[Unit]
+Description=Process new scans as soon as they arrive
+
+[Path]
+PathChanged=/var/lib/scanpi/incoming
+
+[Install]
+WantedBy=multi-user.target

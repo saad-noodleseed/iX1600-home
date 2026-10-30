@@ -1,0 +1,9 @@
+[Unit]
+Description=Retry scan uploads every 10 minutes (e.g. after an internet outage)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

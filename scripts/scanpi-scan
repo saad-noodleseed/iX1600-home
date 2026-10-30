@@ -1,0 +1,36 @@
+#!/bin/bash
+# Scan everything in the feeder into a new job folder under /var/lib/scanpi/incoming.
+# Usage: scanpi-scan [sane-device]   (default: first scanner found)
+# Run by hand only while scanbd is stopped, since scanbd holds the scanner.
+set -u
+umask 002   # let the processing user (group "scanner") clean up our files
+. /etc/scanpi.conf
+
+SPOOL=/var/lib/scanpi
+device=${1:-$(scanimage -f '%d%n' | head -n1)}
+if [ -z "$device" ]; then
+    echo "$(date '+%F %T') no scanner found"
+    exit 1
+fi
+
+job="scan_$(date +%Y-%m-%d_%H%M%S)"
+work="$SPOOL/incoming/.$job"
+mkdir -p "$work"
+
+echo "$(date '+%F %T') scanning $job on $device"
+# scanimage exits non-zero when the feeder runs empty, so count pages instead.
+# shellcheck disable=SC2086
+scanimage -d "$device" --source "$SCAN_SOURCE" --mode "$SCAN_MODE" \
+    --resolution "$SCAN_RESOLUTION" $SCAN_EXTRA \
+    --format=tiff --batch="$work/page%03d.tiff"
+
+pages=$(find "$work" -name 'page*.tiff' | wc -l)
+if [ "$pages" -eq 0 ]; then
+    echo "$(date '+%F %T') no pages scanned (feeder empty?)"
+    rm -rf "$work"
+    exit 1
+fi
+
+# Rename drops the leading dot, which tells scanpi-process the job is complete.
+mv "$work" "$SPOOL/incoming/$job"
+echo "$(date '+%F %T') $job: $pages page(s) queued"
