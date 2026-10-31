@@ -6,8 +6,8 @@ Scan to Google Drive with a ScanSnap iX1600, without ScanSnap Cloud or vendor so
 [iX1600] ─USB─ [Raspberry Pi 4] ── Wi-Fi ──> Google Drive folder
 ```
 
-Press **Scan** on the scanner. The Pi scans both sides, makes a searchable PDF
-(OCR), and uploads it to the Drive folder set by `root_folder_id` in rclone.
+Press **Scan** on the scanner. The Pi scans both sides, makes a PDF,
+and uploads it to the Drive folder set by `root_folder_id` in rclone.
 If the internet is down, scans wait on the Pi and upload later.
 
 ## Prerequisites
@@ -41,7 +41,7 @@ Then press **Scan** on the scanner.
 | What | Command |
 | --- | --- |
 | Scan log | `tail -f /var/lib/scanpi/scan.log` |
-| OCR/upload log | `journalctl -fu scanpi-process` |
+| PDF/upload log | `journalctl -fu scanpi-process` |
 | Button detection | `sudo systemctl stop scanbd; sudo scanbd -f -d7` (press Scan, watch output) |
 | Jobs waiting / failed | `ls /var/lib/scanpi/{incoming,outbox,failed}` |
 
@@ -50,7 +50,7 @@ detected. Run the button-detection command above and share the output.
 
 ## Settings
 
-Edit `/etc/scanpi.conf`: destination, subfolders by date, OCR language, colour
+Edit `/etc/scanpi.conf`: destination, subfolders by date, colour
 mode, resolution, duplex, blank-page skipping.
 
 ## Files
@@ -60,6 +60,6 @@ mode, resolution, duplex, blank-page skipping.
 | `config/scanbd.conf` | `/etc/scanbd/scanbd.conf` | Maps the Scan button to the script |
 | `scripts/scan.script` | `/etc/scanbd/scripts/` | Button hook |
 | `scripts/scanpi-scan` | `/usr/local/bin/` | Scans pages into `/var/lib/scanpi/incoming` |
-| `scripts/scanpi-process` | `/usr/local/bin/` | OCR, then `rclone move` to Drive |
+| `scripts/scanpi-process` | `/usr/local/bin/` | Makes the PDF, then `rclone move` to Drive |
 | `systemd/scanpi-process.*` | `/etc/systemd/system/` | Runs processing on new scans and every 10 min |
 | `config/scanpi.conf` | `/etc/scanpi.conf` | Your settings (not overwritten on reinstall) |

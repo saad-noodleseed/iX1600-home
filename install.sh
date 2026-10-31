@@ -1,5 +1,5 @@
 #!/bin/bash
-# Set up the Pi: Scan button -> searchable PDF -> Google Drive.
+# Set up the Pi: Scan button -> PDF -> Google Drive.
 # Run from the repo folder as the user who ran "rclone config":  sudo ./install.sh
 set -euo pipefail
 
@@ -12,7 +12,7 @@ USER_NAME=$SUDO_USER
 
 echo "== Installing packages"
 apt-get update
-apt-get install -y sane-utils scanbd ocrmypdf img2pdf tesseract-ocr-eng rclone
+apt-get install -y sane-utils scanbd img2pdf rclone
 
 echo "== Checking rclone remote"
 if ! sudo -u "$USER_NAME" rclone listremotes | grep -qx 'gdrive:'; then

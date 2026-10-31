@@ -1,5 +1,5 @@
 #!/bin/bash
-# Turn finished scan jobs into searchable PDFs and upload them to Google Drive.
+# Turn finished scan jobs into PDFs and upload them to Google Drive.
 # Runs from scanpi-process.path (new job) and scanpi-process.timer (retries).
 # Local files are only removed after rclone confirms the upload.
 set -u
@@ -19,16 +19,13 @@ for job in "$SPOOL"/incoming/scan_*/; do
         sub=$(date -d "${name:5:10}" +"$SUBDIR_FORMAT")/
     fi
     mkdir -p "$SPOOL/outbox/$sub"
-    raw="$job/raw.pdf"
     out="$SPOOL/outbox/$sub$name.pdf"
 
     echo "processing $name"
-    if img2pdf "$job"/page*.{jpg,tiff} -o "$raw" &&
-       ocrmypdf -l "$OCR_LANG" --rotate-pages --deskew --optimize 1 \
-           --output-type pdf "$raw" "$out"; then
+    if img2pdf "$job"/page*.{jpg,tiff} -o "$out"; then
         rm -rf "$job"
     else
-        echo "OCR failed for $name, moving to failed/"
+        echo "PDF failed for $name, moving to failed/"
         mkdir -p "$SPOOL/failed"
         mv "$job" "$SPOOL/failed/"
         rm -f "$out"

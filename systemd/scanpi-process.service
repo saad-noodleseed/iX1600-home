@@ -1,5 +1,5 @@
 [Unit]
-Description=OCR scanned pages and upload them to Google Drive
+Description=Turn scanned pages into PDFs and upload them to Google Drive
 Wants=network-online.target
 After=network-online.target
 
