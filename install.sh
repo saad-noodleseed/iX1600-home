@@ -45,7 +45,7 @@ fi
 echo "== systemd units"
 sed "s/@USER@/$USER_NAME/" systemd/scanpi-process.service \
     > /etc/systemd/system/scanpi-process.service
-install -m 644 systemd/scanpi-process.path systemd/scanpi-process.timer /etc/systemd/system/
+install -m 644 systemd/scanpi-process.path systemd/scanpi-process.timer systemd/scanbd.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now scanpi-process.path scanpi-process.timer
 systemctl enable scanbd

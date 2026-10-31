@@ -1,3 +1,3 @@
 #!/bin/sh
 # Called by scanbd when the Scan button is pressed.
-exec /usr/local/bin/scanpi-scan "$SCANBD_DEVICE" >>/var/lib/scanpi/scan.log 2>&1
+cd / && exec /usr/local/bin/scanpi-scan "$SCANBD_DEVICE" >>/var/lib/scanpi/scan.log 2>&1

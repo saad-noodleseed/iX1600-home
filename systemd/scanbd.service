@@ -1,0 +1,12 @@
+# Replaces Debian's /etc/init.d/scanbd, which refuses to start unless
+# /etc/sane.d/dll.conf lists only the "net" backend (ours lists fujitsu).
+[Unit]
+Description=Scanner button daemon (scanbd)
+After=dbus.service
+
+[Service]
+ExecStart=/usr/sbin/scanbd -f
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
