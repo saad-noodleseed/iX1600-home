@@ -36,9 +36,13 @@ for job in "$SPOOL"/incoming/scan_*/; do
 done
 
 # Upload; rclone move deletes each local file only once it is safely uploaded.
-rclone move "$SPOOL/outbox" "$DEST" --include '*.pdf' --delete-empty-src-dirs \
-    --retries 3 --log-level INFO \
-    || echo "upload failed, will retry on next run"
+# Skip when there's nothing to send: listing Drive alone takes ~50s on the Pi.
+# --no-traverse checks just our files instead of listing the whole destination.
+if [ -n "$(find "$SPOOL/outbox" -name '*.pdf' -print -quit)" ]; then
+    rclone move "$SPOOL/outbox" "$DEST" --include '*.pdf' --delete-empty-src-dirs \
+        --no-traverse --retries 3 --log-level INFO \
+        || echo "upload failed, will retry on next run"
+fi
 
 # A scan that finished while we ran doesn't re-trigger the path unit, so go again.
 # Failed jobs were moved to failed/, so this can't loop forever.
