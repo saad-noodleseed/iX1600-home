@@ -1,3 +1,5 @@
 #!/bin/sh
-# Called by scanbd when the Scan button is pressed.
+# Called by scanbd when the Scan button is pressed or paper is loaded.
+# ponytail: fixed 5s to finish settling the stack; tune here if it grabs paper too early.
+[ "$SCANBD_ACTION" = paperload ] && sleep 5
 cd / && exec /usr/local/bin/scanpi-scan "$SCANBD_DEVICE" >>/var/lib/scanpi/scan.log 2>&1
