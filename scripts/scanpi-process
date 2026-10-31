@@ -39,3 +39,8 @@ done
 rclone move "$SPOOL/outbox" "$DEST" --include '*.pdf' --delete-empty-src-dirs \
     --retries 3 --log-level INFO \
     || echo "upload failed, will retry on next run"
+
+# A scan that finished while we ran doesn't re-trigger the path unit, so go again.
+# Failed jobs were moved to failed/, so this can't loop forever.
+jobs=("$SPOOL"/incoming/scan_*/)
+[ ${#jobs[@]} -gt 0 ] && exec "$0"
