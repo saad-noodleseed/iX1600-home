@@ -22,9 +22,9 @@ echo "$(date '+%F %T') scanning $job on $device"
 # shellcheck disable=SC2086
 scanimage -d "$device" --source "$SCAN_SOURCE" --mode "$SCAN_MODE" \
     --resolution "$SCAN_RESOLUTION" $SCAN_EXTRA \
-    --format=tiff --batch="$work/page%03d.tiff"
+    --format=jpeg --batch="$work/page%03d.jpg"
 
-pages=$(find "$work" -name 'page*.tiff' | wc -l)
+pages=$(find "$work" -name 'page*' | wc -l)
 if [ "$pages" -eq 0 ]; then
     echo "$(date '+%F %T') no pages scanned (feeder empty?)"
     rm -rf "$work"

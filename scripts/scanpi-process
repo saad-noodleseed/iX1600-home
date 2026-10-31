@@ -23,7 +23,7 @@ for job in "$SPOOL"/incoming/scan_*/; do
     out="$SPOOL/outbox/$sub$name.pdf"
 
     echo "processing $name"
-    if img2pdf "$job"/page*.tiff -o "$raw" &&
+    if img2pdf "$job"/page*.{jpg,tiff} -o "$raw" &&
        ocrmypdf -l "$OCR_LANG" --rotate-pages --deskew --optimize 1 \
            --output-type pdf "$raw" "$out"; then
         rm -rf "$job"
