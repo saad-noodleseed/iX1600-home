@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner Status</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1c2330;--mut:#667085;--line:#e4e7ec;
+--ok:#12805c;--warn:#b25e09;--fail:#c0262d;--unk:#667085;
+--okbg:#e6f6ef;--warnbg:#fdf1de;--failbg:#fde8e8;--unkbg:#eceff3}
+@media(prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1a1f28;--fg:#e6e9ef;--mut:#98a2b3;--line:#2b3340;
+--ok:#4cc79a;--warn:#f0a850;--fail:#ff7b80;--unk:#98a2b3;
+--okbg:#12302a;--warnbg:#3a2a12;--failbg:#3d1c1f;--unkbg:#262d38}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+h1{font-size:20px;margin:0}
+.mut{color:var(--mut);font-size:13px}
+.banner{border-radius:12px;padding:14px 16px;font-weight:600;font-size:17px;margin-bottom:16px}
+.banner small{display:block;font-weight:400;font-size:13px;opacity:.85;margin-top:2px}
+.s-ok{color:var(--ok)}.s-warn{color:var(--warn)}.s-fail{color:var(--fail)}.s-unknown{color:var(--unk)}
+.banner.ok{background:var(--okbg);color:var(--ok)}.banner.warn{background:var(--warnbg);color:var(--warn)}
+.banner.fail{background:var(--failbg);color:var(--fail)}.banner.unknown{background:var(--unkbg);color:var(--unk)}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:0;padding:12px 16px 4px}
+.row{display:flex;gap:12px;padding:10px 16px;border-top:1px solid var(--line);align-items:flex-start}
+.row:first-of-type{border-top:0}
+.dot{flex:none;width:11px;height:11px;border-radius:50%;margin-top:6px;background:currentColor}
+.row .t{flex:1;min-width:0}.row b{font-weight:600}
+.row .sum{color:var(--mut)}
+pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,monospace;color:var(--mut)}
+button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:5px 10px;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+details{border-top:1px solid var(--line);padding:10px 16px}
+summary{cursor:pointer;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:13px}td{padding:3px 0;vertical-align:top}td:first-child{color:var(--mut);width:40%}
+.logs pre{max-height:260px;overflow:auto;color:var(--fg)}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Scanner status <span class="mut" id="host"></span></h1>
+  <span class="mut" id="updated">loading…</span>
+</header>
+<div id="banner" class="banner unknown">Loading…</div>
+<div id="groups"></div>
+<section id="queue"></section>
+<section>
+  <details><summary>Settings (/etc/scanpi.conf)</summary><table id="settings"></table></details>
+  <details class="logs"><summary>Scan log</summary><pre id="log-scan"></pre></details>
+  <details class="logs"><summary>PDF / upload log</summary><pre id="log-process"></pre></details>
+</section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ago = s => s < 90 ? s + "s ago" : s < 5400 ? Math.round(s/60) + " min ago" : Math.round(s/3600) + " h ago";
+const headline = {ok:"Everything is working", warn:"Working, but needs attention", fail:"Something is broken", unknown:"Checking…"};
+
+function row(c) {
+  let extra = "";
+  if (c.checked_ago_s !== undefined)
+    extra = `<div class="mut">${c.running ? "re-checking now…" : "checked " + ago(c.checked_ago_s)}</div>`;
+  if (c.expiry) extra += `<div class="mut">Login token refreshes by ${esc(new Date(c.expiry).toLocaleString())}</div>`;
+  const btn = c.name === "Google Drive folder"
+    ? `<button id="chk" ${c.running ? "disabled" : ""}>Check now</button>` : "";
+  return `<div class="row"><span class="dot s-${c.status}"></span>
+    <div class="t"><b>${esc(c.name)}</b> <span class="sum">— ${esc(c.summary)}</span>${extra}
+    ${c.detail ? `<pre>${esc(c.detail)}</pre>` : ""}</div>${btn}</div>`;
+}
+
+function render(d) {
+  $("host").textContent = d.host;
+  $("updated").textContent = "updated " + new Date(d.time).toLocaleTimeString();
+  const b = $("banner");
+  b.className = "banner " + d.overall;
+  b.innerHTML = esc(headline[d.overall]) +
+    `<small>Last scan received: ${d.last_scan ? esc(d.last_scan) : "none in the log"}</small>`;
+  $("groups").innerHTML = Object.entries(d.checks).map(([g, cs]) =>
+    `<section><h2>${esc(g)}</h2>${cs.map(row).join("")}</section>`).join("");
+  const q = $("chk");
+  if (q) q.onclick = async () => { q.disabled = true; await fetch("/api/check-drive", {method:"POST"}); load(); };
+
+  const items = Object.entries(d.queue).flatMap(([k, v]) => v.map(i => `<tr><td>${k}</td><td>${esc(i.name)} · ${ago(i.age_s)}</td></tr>`));
+  $("queue").innerHTML = `<h2>Files on the Pi</h2><details open><summary>${items.length ? items.length + " item(s)" : "Nothing waiting"}</summary>
+    ${items.length ? `<table>${items.join("")}</table>` : ""}</details>`;
+  $("settings").innerHTML = Object.entries(d.settings).map(([k, v]) => `<tr><td>${k}</td><td>${esc(v) || "<span class=mut>(empty)</span>"}</td></tr>`).join("");
+  for (const k of ["scan", "process"]) {
+    const el = $("log-" + k), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+    el.textContent = d.logs[k].join("\n");
+    if (atEnd) el.scrollTop = el.scrollHeight;
+  }
+}
+
+async function load() {
+  try { render(await (await fetch("/api/status")).json()); }
+  catch (e) {
+    $("banner").className = "banner fail";
+    $("banner").textContent = "Can't reach the Pi's status service (is the Pi on?)";
+  }
+}
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>

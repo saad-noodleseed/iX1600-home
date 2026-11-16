@@ -28,7 +28,8 @@ install -d -o root -g scanner -m 2775 /var/lib/scanpi \
 
 echo "== Config and scripts"
 [ -f /etc/scanpi.conf ] || install -m 644 config/scanpi.conf /etc/scanpi.conf
-install -m 755 scripts/scanpi-scan scripts/scanpi-process /usr/local/bin/
+install -m 755 scripts/scanpi-scan scripts/scanpi-process scripts/scanpi-web /usr/local/bin/
+install -D -m 644 scripts/scanpi-web.html /usr/local/share/scanpi/index.html
 install -d /etc/scanbd/scripts
 install -m 755 scripts/scan.script /etc/scanbd/scripts/scan.script
 [ -f /etc/scanbd/scanbd.conf.orig ] || cp /etc/scanbd/scanbd.conf /etc/scanbd/scanbd.conf.orig
@@ -45,12 +46,15 @@ fi
 echo "== systemd units"
 sed "s/@USER@/$USER_NAME/" systemd/scanpi-process.service \
     > /etc/systemd/system/scanpi-process.service
+sed "s/@USER@/$USER_NAME/" systemd/scanpi-web.service > /etc/systemd/system/scanpi-web.service
 install -m 644 systemd/scanpi-process.path systemd/scanpi-process.timer systemd/scanbd.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now scanpi-process.path scanpi-process.timer
+systemctl enable --now scanpi-process.path scanpi-process.timer scanpi-web
+systemctl restart scanpi-web
 systemctl enable scanbd
 systemctl restart scanbd
 
 echo
 echo "Done. Log out and back in (for the 'scanner' group), then press Scan."
+echo "Status page:  http://$(hostname).local:8080   (or http://$(hostname -I | cut -d' ' -f1):8080)"
 echo "Watch it work:  tail -f /var/lib/scanpi/scan.log   and   journalctl -fu scanpi-process"

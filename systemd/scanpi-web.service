@@ -1,0 +1,15 @@
+[Unit]
+Description=Scanner status web page
+After=network.target
+
+[Service]
+# Replaced by install.sh with the user who ran "rclone config".
+User=@USER@
+Group=scanner
+SupplementaryGroups=systemd-journal
+ExecStart=/usr/local/bin/scanpi-web
+Environment=SCANPI_PORT=8080
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

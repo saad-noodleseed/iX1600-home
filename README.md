@@ -36,6 +36,16 @@ sudo systemctl start scanbd
 
 Then press **Scan** on the scanner.
 
+## Status page
+
+Open **`http://<pi-hostname>.local:8080`** from any device on your network.
+It shows green/amber/red for: Google Drive folder access (live `rclone` test,
+re-checked every 5 min or on demand), internet, scanner on USB, the button
+daemon, files waiting/failed, the last upload run, disk and CPU temperature,
+plus the scan and upload logs. It is read-only and has no login, so keep it on
+your home network (change the port with `SCANPI_PORT` in
+`/etc/systemd/system/scanpi-web.service`).
+
 ## Watching and troubleshooting
 
 | What | Command |
@@ -62,4 +72,6 @@ mode, resolution, duplex, blank-page skipping.
 | `scripts/scanpi-scan` | `/usr/local/bin/` | Scans pages into `/var/lib/scanpi/incoming` |
 | `scripts/scanpi-process` | `/usr/local/bin/` | Makes the PDF, then `rclone move` to Drive |
 | `systemd/scanpi-process.*` | `/etc/systemd/system/` | Runs processing on new scans and every 10 min |
+| `scripts/scanpi-web`, `scanpi-web.html` | `/usr/local/bin/`, `/usr/local/share/scanpi/` | Status web page on port 8080 |
+| `systemd/scanpi-web.service` | `/etc/systemd/system/` | Keeps the status page running |
 | `config/scanpi.conf` | `/etc/scanpi.conf` | Your settings (not overwritten on reinstall) |

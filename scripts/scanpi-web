@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Read-only status page for the scan-to-Drive pipeline. Standard library only.
+
+Runs as the user who did "rclone config" so it can test the same Drive access
+the uploader uses. Serves one HTML page plus /api/status (JSON).
+Env: SCANPI_PORT (default 8080), SCANPI_BIND (default 0.0.0.0).
+"""
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import threading
+import time
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+SPOOL = os.environ.get("SCANPI_SPOOL", "/var/lib/scanpi")
+CONF = os.environ.get("SCANPI_CONF", "/etc/scanpi.conf")
+PORT = int(os.environ.get("SCANPI_PORT", "8080"))
+BIND = os.environ.get("SCANPI_BIND", "0.0.0.0")
+DRIVE_EVERY = 300      # seconds between automatic Drive checks
+DRIVE_TIMEOUT = 120    # listing Drive can take ~50s on a Pi
+
+OK, WARN, FAIL, UNKNOWN = "ok", "warn", "fail", "unknown"
+
+
+def run(cmd, timeout=10):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout + p.stderr).strip()
+    except FileNotFoundError:
+        return 127, f"{cmd[0]}: not installed"
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout}s"
+
+
+def read_conf():
+    """Parse the simple KEY="value" lines of scanpi.conf (never executed)."""
+    conf = {}
+    try:
+        for line in open(CONF):
+            m = re.match(r'\s*([A-Z_]+)=(?:"([^"]*)"|(\S*))', line)
+            if m:
+                conf[m.group(1)] = m.group(2) if m.group(2) is not None else m.group(3)
+    except OSError:
+        pass
+    return conf
+
+
+def check(name, status, summary, detail=""):
+    return {"name": name, "status": status, "summary": summary, "detail": detail}
+
+
+# ---------------------------------------------------------------- Google Drive
+drive = {"checked": None, "running": False, "result": None}
+drive_lock = threading.Lock()
+
+
+def rclone_token_expiry(remote):
+    rc, out = run(["rclone", "config", "dump"], 15)
+    if rc != 0:
+        return None
+    try:
+        tok = json.loads(json.loads(out)[remote].get("token", "{}"))
+        return tok.get("expiry")
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def do_drive_check():
+    dest = read_conf().get("DEST", "gdrive:")
+    remote = dest.split(":")[0]
+    t0 = time.time()
+    rc, out = run(["rclone", "lsf", dest, "--max-depth", "1", "--max-count", "1",
+                   "--contimeout", "15s", "--timeout", "30s", "--retries", "1"],
+                  DRIVE_TIMEOUT)
+    took = time.time() - t0
+    if rc == 0:
+        res = check("Google Drive folder", OK, f"Can read {dest} ({took:.0f}s)",
+                    "rclone can list the destination folder.")
+    elif rc == 127:
+        res = check("Google Drive folder", FAIL, "rclone is not installed", out)
+    elif rc == 124:
+        res = check("Google Drive folder", FAIL, "Timed out talking to Drive", out)
+    else:
+        hint = ""
+        if re.search(r"invalid_grant|token|401|403|unauthor", out, re.I):
+            hint = "Looks like an expired or revoked login. Re-run: rclone config reconnect %s:" % remote
+        elif re.search(r"didn't find section|not found", out, re.I):
+            hint = f"No rclone remote named '{remote}' for this user."
+        res = check("Google Drive folder", FAIL, "Cannot read the Drive folder",
+                    (hint + "\n" if hint else "") + out[-600:])
+    res["took_s"] = round(took, 1)
+    res["expiry"] = rclone_token_expiry(remote)
+    return res
+
+
+def drive_worker():
+    with drive_lock:
+        if drive["running"]:
+            return
+        drive["running"] = True
+    try:
+        res = do_drive_check()
+    except Exception as e:  # never let the checker thread die
+        res = check("Google Drive folder", UNKNOWN, "Check crashed", repr(e))
+    with drive_lock:
+        drive.update(result=res, checked=time.time(), running=False)
+
+
+def drive_loop():
+    while True:
+        drive_worker()
+        time.sleep(DRIVE_EVERY)
+
+
+def drive_check_result():
+    with drive_lock:
+        res, ts, running = drive["result"], drive["checked"], drive["running"]
+    if res is None:
+        return check("Google Drive folder", UNKNOWN, "Checking… (first check takes up to a minute)")
+    res = dict(res)
+    res["checked_ago_s"] = int(time.time() - ts)
+    res["running"] = running
+    return res
+
+
+# ----------------------------------------------------------------- fast checks
+def unit_state(unit):
+    rc, out = run(["systemctl", "show", unit, "--property=ActiveState,SubState,Result,"
+                   "ExecMainStatus,ExecMainExitTimestamp,UnitFileState,NRestarts"], 5)
+    props = dict(l.split("=", 1) for l in out.splitlines() if "=" in l) if rc == 0 else {}
+    return props
+
+
+def check_services():
+    out = []
+    for unit, label in (("scanbd.service", "Scan button daemon (scanbd)"),
+                        ("scanpi-process.path", "New-scan watcher"),
+                        ("scanpi-process.timer", "10-minute retry timer")):
+        p = unit_state(unit)
+        if not p:
+            out.append(check(label, UNKNOWN, "systemctl not available"))
+            continue
+        st = p.get("ActiveState", "?")
+        if st == "active":
+            out.append(check(label, OK, f"{st} ({p.get('SubState','')})"))
+        else:
+            out.append(check(label, FAIL, f"{st} ({p.get('SubState','')})",
+                             f"Try: sudo systemctl restart {unit}"))
+    p = unit_state("scanpi-process.service")
+    if p:
+        st, status = p.get("ActiveState", "?"), p.get("ExecMainStatus", "0")
+        last = p.get("ExecMainExitTimestamp", "") or "never"
+        if st == "activating" or st == "active":
+            out.append(check("Last PDF/upload run", OK, "running now"))
+        elif p.get("Result") not in ("success", None) or status not in ("0", ""):
+            out.append(check("Last PDF/upload run", FAIL,
+                             f"failed (exit {status})", f"Finished: {last}\nSee the log below."))
+        else:
+            out.append(check("Last PDF/upload run", OK, "succeeded", f"Finished: {last}"))
+    return out
+
+
+def check_scanner():
+    rc, out = run(["lsusb"], 5)
+    if rc == 127:
+        return check("Scanner on USB", UNKNOWN, "lsusb not available")
+    hits = [l for l in out.splitlines() if re.search(r"04c5|fujitsu|pfu|scansnap", l, re.I)]
+    if hits:
+        return check("Scanner on USB", OK, "ScanSnap detected", hits[0])
+    return check("Scanner on USB", FAIL, "No ScanSnap on USB",
+                 "Check the USB cable and that the scanner is powered on / lid open.\n" + out[-300:])
+
+
+def check_internet():
+    t0 = time.time()
+    try:
+        socket.create_connection(("www.googleapis.com", 443), timeout=5).close()
+        return check("Internet (Google APIs)", OK, f"reachable ({(time.time()-t0)*1000:.0f} ms)")
+    except OSError as e:
+        return check("Internet (Google APIs)", FAIL, "Cannot reach Google",
+                     f"{e}\nScans stay on the Pi and upload when this recovers.")
+
+
+def list_jobs(sub):
+    d = os.path.join(SPOOL, sub)
+    items = []
+    for root, dirs, files in os.walk(d):
+        if sub == "incoming":
+            names = [os.path.join(root, n) for n in dirs] if root == d else []
+        else:
+            names = [os.path.join(root, n) for n in files + (dirs if sub == "failed" else [])
+                     if sub != "failed" or root == d]
+        for p in names:
+            if os.path.basename(p).startswith("."):
+                continue
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            items.append({"name": os.path.relpath(p, d), "age_s": int(time.time() - st.st_mtime)})
+        if sub in ("incoming", "failed"):
+            break
+    items.sort(key=lambda i: -i["age_s"])
+    return items
+
+
+def check_queue():
+    if not os.path.isdir(SPOOL):
+        return [check("Scan spool folder", FAIL, f"{SPOOL} is missing", "Has install.sh been run?")], {}
+    q = {s: list_jobs(s) for s in ("incoming", "outbox", "failed")}
+    out = []
+
+    def ago(s):
+        return f"{s//86400}d" if s >= 86400 else f"{s//3600}h" if s >= 3600 else f"{s//60}m"
+
+    n = len(q["failed"])
+    out.append(check("Failed scans", FAIL if n else OK,
+                     f"{n} in failed/" if n else "none",
+                     "PDF could not be built; the raw pages are kept in failed/." if n else ""))
+    n = len(q["outbox"])
+    if n:
+        oldest = q["outbox"][0]["age_s"]
+        st = WARN if oldest > 1800 else OK
+        out.append(check("Waiting to upload", st, f"{n} PDF(s), oldest {ago(oldest)}",
+                         "Stuck for over 30 min. Check Drive and internet above." if st == WARN else
+                         "Uploads automatically within ~10 minutes."))
+    else:
+        out.append(check("Waiting to upload", OK, "nothing"))
+    n = len(q["incoming"])
+    if n:
+        oldest = q["incoming"][0]["age_s"]
+        out.append(check("Scans awaiting PDF", WARN if oldest > 600 else OK,
+                         f"{n} job(s), oldest {ago(oldest)}"))
+    else:
+        out.append(check("Scans awaiting PDF", OK, "none"))
+    return out, q
+
+
+def check_system():
+    out = []
+    du = shutil.disk_usage(SPOOL if os.path.isdir(SPOOL) else "/")
+    pct = du.used * 100 / du.total
+    out.append(check("Disk space", FAIL if pct > 95 else WARN if pct > 85 else OK,
+                     f"{pct:.0f}% used, {du.free/2**30:.1f} GB free"))
+    try:
+        t = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+        out.append(check("CPU temperature", FAIL if t > 80 else WARN if t > 70 else OK, f"{t:.0f} °C"))
+    except (OSError, ValueError):
+        pass
+    try:
+        up = float(open("/proc/uptime").read().split()[0])
+        out.append(check("Uptime", OK, f"{int(up//86400)}d {int(up%86400//3600)}h {int(up%3600//60)}m"))
+    except OSError:
+        pass
+    return out
+
+
+def tail(path, n=40):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16384))
+            return f.read().decode(errors="replace").splitlines()[-n:]
+    except OSError as e:
+        return [f"(cannot read {path}: {e.strerror})"]
+
+
+def journal(unit, n=40):
+    rc, out = run(["journalctl", "-u", unit, "-n", str(n), "--no-pager", "-o", "short-iso"], 8)
+    return out.splitlines() if rc == 0 else [f"(cannot read journal: {out[:200]})"]
+
+
+def last_scan(lines):
+    for l in reversed(lines):
+        if "page(s) queued" in l:
+            return l[:19]
+    return None
+
+
+_cache = {"t": 0, "v": None}
+
+
+def status():
+    if time.time() - _cache["t"] < 4 and _cache["v"]:
+        return _cache["v"]
+    queue_checks, q = check_queue()
+    scan_log = tail(os.path.join(SPOOL, "scan.log"))
+    checks = {
+        "Cloud": [drive_check_result(), check_internet()],
+        "Scanner": [check_scanner()] + [c for c in check_services() if "daemon" in c["name"]],
+        "Pipeline": queue_checks + [c for c in check_services() if "daemon" not in c["name"]],
+        "System": check_system(),
+    }
+    allc = [c for g in checks.values() for c in g]
+    overall = FAIL if any(c["status"] == FAIL for c in allc) else \
+        WARN if any(c["status"] in (WARN, UNKNOWN) for c in allc) else OK
+    conf = read_conf()
+    v = {
+        "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "host": socket.gethostname(),
+        "overall": overall,
+        "last_scan": last_scan(scan_log),
+        "checks": checks,
+        "queue": q,
+        "settings": {k: conf.get(k, "") for k in
+                     ("DEST", "SUBDIR_FORMAT", "SCAN_SOURCE", "SCAN_MODE", "SCAN_RESOLUTION", "SCAN_EXTRA")},
+        "logs": {"scan": scan_log, "process": journal("scanpi-process")},
+    }
+    _cache.update(t=time.time(), v=v)
+    return v
+
+
+# ------------------------------------------------------------------------ HTTP
+PAGE = open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "scanpi-web.html")).read() \
+    if os.path.exists(os.path.join(os.path.dirname(os.path.realpath(__file__)), "scanpi-web.html")) \
+    else open("/usr/local/share/scanpi/index.html").read()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype):
+        data = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self._send(200, PAGE, "text/html; charset=utf-8")
+        elif self.path == "/api/status":
+            self._send(200, json.dumps(status()), "application/json")
+        else:
+            self._send(404, "not found", "text/plain")
+
+    def do_POST(self):
+        if self.path == "/api/check-drive":
+            threading.Thread(target=drive_worker, daemon=True).start()
+            _cache["t"] = 0
+            self._send(202, '{"started":true}', "application/json")
+        else:
+            self._send(404, "not found", "text/plain")
+
+    def log_message(self, *a):
+        pass
+
+
+if __name__ == "__main__":
+    threading.Thread(target=drive_loop, daemon=True).start()
+    srv = ThreadingHTTPServer((BIND, PORT), Handler)
+    print(f"scanpi-web listening on {BIND}:{PORT}", flush=True)
+    srv.serve_forever()
